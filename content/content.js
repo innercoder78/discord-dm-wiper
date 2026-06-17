@@ -170,12 +170,38 @@
   }
   function isRealMessageNode(node) {
     if (!node || node.closest('[class*="repliedMessage"], [class*="replyBar"]')) return false;
-    const content = node.querySelector('[id^="message-content-"]');
-    const time = node.querySelector('time[datetime]');
-    const id = getMessageId(node);
-    const ownIdMatch = (node.id || '').match(/^chat-messages-(\d{15,25})$/);
-    if (ownIdMatch && content) return ownIdMatch[1] === id;
-    return Boolean(content || time || (id && ownIdMatch));
+    if (containsNestedMessageNodes(node)) return false;
+    const indicators = getMessageNodeIndicators(node);
+    return Boolean(indicators.hasTimestamp || indicators.hasMessageContentElement || indicators.hasAttachmentOrMedia || indicators.hasMessageActionArea);
+  }
+  function containsNestedMessageNodes(node) {
+    return Boolean(node.querySelector('[id^="chat-messages-"], li[class*="messageListItem"], div[class*="messageListItem"]'));
+  }
+  function getMessageNodeIndicators(node) {
+    return {
+      hasMessageContentElement: Boolean(node.querySelector('[id^="message-content-"]')),
+      hasTimestamp: Boolean(node.querySelector('time[datetime]')),
+      hasAttachmentOrMedia: hasAttachmentOrMedia(node),
+      hasMessageActionArea: hasMessageActionArea(node)
+    };
+  }
+  function hasAttachmentOrMedia(node) {
+    return Boolean(node.querySelector([
+      '[class*="attachment"]',
+      '[class*="embed"]',
+      '[class*="imageWrapper"]',
+      '[class*="media"]',
+      '[class*="sticker"]',
+      'img[src]',
+      'video[src]',
+      'audio[src]',
+      'a[href][download]',
+      'a[href*="cdn.discordapp.com"]',
+      'a[href*="media.discordapp.net"]'
+    ].join(',')));
+  }
+  function hasMessageActionArea(node) {
+    return Array.from(node.querySelectorAll('[aria-label], [role="button"]')).some((el) => /more|actions|reply|react/i.test(`${el.getAttribute('aria-label') || ''} ${el.getAttribute('role') || ''}`));
   }
   function getAuthor(node) { return detectAuthor(node).author; }
   function detectAuthor(node) {
@@ -210,12 +236,15 @@
       cur = cur.previousElementSibling;
     }
 
-    const content = node.querySelector('[id^="message-content-"]');
-    const previousContent = content && Array.from(group.querySelectorAll('[id^="message-content-"]')).filter((el) => el.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).pop();
-    if (!previousContent) return '';
-    const previousMessage = previousContent.closest('[id^="chat-messages-"], li[class*="messageListItem"], div[class*="messageListItem"]');
-    if (!previousMessage || previousMessage === node || previousMessage.closest('li[class*="messageListItem"], div[class*="messageListItem"]') !== group) return '';
-    return readAuthorFrom(previousMessage) || readAuthorFrom(group);
+    const anchor = getMessageOrderAnchor(node);
+    if (!anchor) return '';
+    const previousAuthor = Array.from(group.querySelectorAll('[class*="username"], h3 span, [aria-label*="Username"]'))
+      .filter((el) => el.compareDocumentPosition(anchor) & Node.DOCUMENT_POSITION_FOLLOWING)
+      .pop();
+    return previousAuthor ? previousAuthor.textContent.trim() : '';
+  }
+  function getMessageOrderAnchor(node) {
+    return node.querySelector('time[datetime]') || node.querySelector('[id^="message-content-"]') || node;
   }
   function isMessageBoundary(el) {
     const marker = `${el.className || ''} ${el.getAttribute('role') || ''} ${el.getAttribute('aria-label') || ''}`;
@@ -380,6 +409,10 @@
       authorInferred: details.authorDetails.inferred,
       authorInferenceConfidence: details.authorDetails.confidence,
       authorMatchedEnteredDisplayName: details.authorMatched,
+      hasMessageContentElement: getMessageNodeIndicators(node).hasMessageContentElement,
+      hasTimestamp: getMessageNodeIndicators(node).hasTimestamp,
+      hasAttachmentOrMedia: getMessageNodeIndicators(node).hasAttachmentOrMedia,
+      isRealMessageNode: isRealMessageNode(node),
       rawTimestampAttributesFound: getTimestampAttributes(node),
       parsedDateResult: describeDate(details.date),
       nearestVisibleDiscordDayDividerText: getNearestDayDividerText(node),
