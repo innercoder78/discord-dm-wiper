@@ -6,7 +6,6 @@
   const toDate = document.getElementById('toDate');
   const deleteMessages = document.getElementById('deleteMessages');
   const undoReactions = document.getElementById('undoReactions');
-  const developerMode = document.getElementById('developerMode');
   const start = document.getElementById('start');
   const error = document.getElementById('error');
 
@@ -25,16 +24,13 @@
       fromDate: fromDate.value,
       toDate: toDate.value,
       deleteMessages: deleteMessages.checked,
-      undoReactions: undoReactions.checked,
-      developerMode: developerMode.checked,
-      popupValidationLog: null
+      undoReactions: undoReactions.checked
     };
 
     if (!settings.displayName) return showError('Enter your exact Discord display name.');
     if (!settings.deleteMessages && !settings.undoReactions) return showError('Select at least one wipe option.');
     if (rangeMode === 'date' && (!settings.fromDate || !settings.toDate)) return showError('Choose both dates or select EVERYTHING.');
-    settings.popupValidationLog = buildPopupValidationLog(settings);
-    if (rangeMode === 'date' && !settings.popupValidationLog.validationPassed) return showError('From date must not be after To date.');
+    if (rangeMode === 'date' && !isValidDateRange(settings)) return showError('From date must not be after To date.');
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !/^https:\/\/(canary\.|ptb\.)?discord\.com\//.test(tab.url || '')) return showError('Open a Discord Web one-on-one DM first.');
@@ -47,32 +43,10 @@
     window.close();
   });
 
-  function buildPopupValidationLog(settings) {
-    if (settings.rangeMode !== 'date') {
-      return {
-        rawFromInput: settings.fromDate,
-        rawToInput: settings.toDate,
-        fromStartLocal: null,
-        toEndLocal: null,
-        fromStartMs: null,
-        toEndMs: null,
-        validationPassed: true
-      };
-    }
-
-    const fromStart = parseDateInputAsLocalDayBounds(settings.fromDate, false);
-    const toEnd = parseDateInputAsLocalDayBounds(settings.toDate, true);
-    const fromStartMs = fromStart.getTime();
-    const toEndMs = toEnd.getTime();
-    return {
-      rawFromInput: settings.fromDate,
-      rawToInput: settings.toDate,
-      fromStartLocal: describeDate(fromStart),
-      toEndLocal: describeDate(toEnd),
-      fromStartMs,
-      toEndMs,
-      validationPassed: fromStartMs <= toEndMs
-    };
+  function isValidDateRange(settings) {
+    const fromStartMs = parseDateInputAsLocalDayBounds(settings.fromDate, false).getTime();
+    const toEndMs = parseDateInputAsLocalDayBounds(settings.toDate, true).getTime();
+    return fromStartMs <= toEndMs;
   }
 
   function parseDateInputAsLocalDayBounds(dateString, isEndOfDay) {
@@ -80,15 +54,6 @@
     return isEndOfDay
       ? new Date(year, month - 1, day, 23, 59, 59, 999)
       : new Date(year, month - 1, day, 0, 0, 0, 0);
-  }
-
-  function describeDate(date) {
-    return {
-      toString: date.toString(),
-      toISOString: Number.isNaN(date.getTime()) ? null : date.toISOString(),
-      getTime: date.getTime(),
-      getTimezoneOffset: date.getTimezoneOffset()
-    };
   }
 
   function showError(message) { error.textContent = message; }

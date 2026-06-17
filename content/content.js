@@ -14,8 +14,6 @@
     paused: false,
     stopped: false,
     stats: { messagesDeleted: 0, reactionsUndone: 0, skipped: 0, failed: 0 },
-    debugLog: [],
-    debugLoggedMessageIds: new Set(),
     discordContext: null,
     status: 'Scroll this DM to scan loaded history.'
   };
@@ -32,9 +30,6 @@
     }
     state.settings = settings;
     state.discordContext = context;
-    state.debugLog = [];
-    state.debugLoggedMessageIds.clear();
-    if (settings.developerMode) initializeDebugLog(context);
     state.messages.clear();
     state.reactions.clear();
     state.wipeList = null;
@@ -76,7 +71,7 @@
   function renderReview() {
     const overlay = ensureOverlay();
     overlay.innerHTML = `
-      <header><h2>Discord DM Wiper</h2><h3>${state.settings.developerMode ? 'Developer Dry Scan' : 'Scan &amp; Review Wipe List'}</h3>${state.settings.developerMode ? '<p class="dev-label">Developer Mode / Dry Run is ON</p>' : ''}</header>
+      <header><h2>Discord DM Wiper</h2><h3>Scan &amp; Review Wipe List</h3></header>
       <section>
         <p>Scroll through the part of this DM you want included.</p>
         <p>${state.settings.rangeMode === 'date' ? 'For a date range, scroll around that range.' : 'For EVERYTHING, scroll through as much history as you want included.'}</p>
@@ -88,12 +83,12 @@
         <span>Wipe options selected</span><span>${optionsLabel()}</span>
       </div></section>
       <section><strong>Found so far</strong>
-        <p id="ddmw-msg-count">${state.settings.developerMode ? 'Messages that would be deleted' : 'Messages to delete'}: ${messageCount()}</p>
-        <p id="ddmw-react-count">${state.settings.developerMode ? 'Reactions that would be undone' : 'Reactions to undo'}: ${reactionCount()}</p>
-        <p id="ddmw-estimate">${state.settings.developerMode ? 'Estimated normal-mode time' : 'Estimated deletion time'}: ${estimate()}</p>
+        <p id="ddmw-msg-count">Messages to delete: ${messageCount()}</p>
+        <p id="ddmw-react-count">Reactions to undo: ${reactionCount()}</p>
+        <p id="ddmw-estimate">Estimated deletion time: ${estimate()}</p>
         <p id="ddmw-status">Status: ${state.status}</p>
       </section>
-      ${state.settings.developerMode ? dryRunActionsHtml() : `<section><strong>Backup reminder</strong>
+      <section><strong>Backup reminder</strong>
         <p>Before wiping anything, you may want to back up this conversation first.</p>
         <p><a href="https://github.com/innercoder78/discord-dm-exporter" target="_blank" rel="noopener noreferrer">Discord DM Exporter</a></p>
         <p class="warning">Deleted messages and undone reactions cannot be restored by this extension.</p>
@@ -102,13 +97,9 @@
         <label><input id="ddmw-understand" type="checkbox"> I understand this cannot be undone.</label>
         <label>Type DELETE to confirm:<input id="ddmw-delete-text" type="text" autocomplete="off"></label>
         <button class="secondary" id="ddmw-cancel">Cancel</button><button class="danger" id="ddmw-confirm" disabled>Confirm Wipe</button>
-      </section>`}`;
+      </section>`;
     overlay.querySelector('#ddmw-cancel')?.addEventListener('click', closeOverlay);
     overlay.querySelector('#ddmw-confirm')?.addEventListener('click', beginWipe);
-    overlay.querySelector('#ddmw-run-dry-scan')?.addEventListener('click', () => scanLoadedMessages('Running dry scan of loaded history...'));
-    overlay.querySelector('#ddmw-copy-log')?.addEventListener('click', copyDebugLog);
-    overlay.querySelector('#ddmw-download-log')?.addEventListener('click', downloadDebugLog);
-    overlay.querySelector('#ddmw-close')?.addEventListener('click', closeOverlay);
     overlay.querySelector('#ddmw-understand')?.addEventListener('input', updateConfirmState);
     overlay.querySelector('#ddmw-delete-text')?.addEventListener('input', updateConfirmState);
     updateConfirmState();
@@ -138,19 +129,15 @@
   function scanMessageNode(node) {
     const id = getMessageId(node);
     if (!id || node.closest('[class*="repliedMessage"], [class*="replyBar"]')) return;
-    const authorDetails = detectAuthor(node);
-    const author = authorDetails.author;
+    const author = getAuthor(node);
     const date = getMessageDate(node);
     const inRange = date ? isInRange(date) : false;
     const authorMatched = author === state.settings.displayName;
-    const wouldTargetMessage = Boolean(date && inRange && state.settings.deleteMessages && authorMatched);
-    if (state.settings.developerMode) logScannedMessage(node, { id, author, authorDetails, date, inRange, authorMatched, wouldTargetMessage });
     if (!date || !inRange) return;
     if (state.settings.deleteMessages && authorMatched) state.messages.set(id, { id, author, time: date.getTime() });
     if (state.settings.undoReactions && !(authorMatched && state.settings.deleteMessages)) {
       findOwnReactions(node).forEach((reaction, index) => {
         const reactionTarget = { id: `${id}:r:${index}:${reaction.label}`, messageId: id, label: reaction.label };
-        if (state.settings.developerMode) logScannedReaction(reactionTarget, { inRange, wouldBeUndone: true });
         state.reactions.set(reactionTarget.id, reactionTarget);
       });
     }
@@ -297,7 +284,6 @@
   function parseDateInputAsLocalDayBounds(dateString, isEndOfDay) { const [year, month, day] = dateString.split('-').map(Number); return isEndOfDay ? new Date(year, month - 1, day, 23, 59, 59, 999) : new Date(year, month - 1, day, 0, 0, 0, 0); }
 
   function beginWipe() {
-    if (state.settings.developerMode) return;
     state.wipeList = { messages: Array.from(state.messages.values()), reactions: Array.from(state.reactions.values()) };
     state.mode = 'wiping'; state.paused = false; state.stopped = false; state.stats = { messagesDeleted: 0, reactionsUndone: 0, skipped: 0, failed: 0 };
     renderProgress(); wipeLoop();
@@ -392,97 +378,8 @@
   function renderComplete() { state.mode='complete'; const s=state.stats; ensureOverlay().innerHTML = `<header><h2>Discord DM Wiper</h2><h3>Wipe complete</h3></header><section><p>Messages deleted: ${s.messagesDeleted}</p><p>Reactions undone: ${s.reactionsUndone}</p><p>Skipped: ${s.skipped}</p><p>Failed: ${s.failed}</p><button id="ddmw-close">Close</button></section>`; document.getElementById('ddmw-close').onclick=closeOverlay; }
 
 
-  function dryRunActionsHtml() {
-    return `<section><strong>Developer Mode / Dry Run is ON</strong>
-      <p class="warning">Dry scan only. No Discord delete buttons, confirmations, or reactions will be clicked.</p>
-      <button id="ddmw-run-dry-scan">Run Dry Scan</button><button id="ddmw-copy-log">Copy Debug Log</button><button id="ddmw-download-log">Download Debug Log</button><button class="secondary" id="ddmw-close">Close</button>
-    </section>`;
-  }
-
-  function initializeDebugLog(context) {
-    const now = new Date();
-    const manifest = chrome.runtime?.getManifest?.();
-    addDebugLine('Discord DM Wiper Developer Mode / Dry Run Debug Log');
-    addDebugLine(`Extension version: ${manifest?.version || 'unknown'}`);
-    addDebugLine(`Browser timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone || 'unknown'}`);
-    addDebugLine(`Current time: ${now.toString()}`);
-    addDebugLine(`Current timezone offset: ${now.getTimezoneOffset()}`);
-    addDebugLine(`Current Discord URL: ${location.href}`);
-    addDebugLine(`One-on-one DM detected: ${Boolean(context.ok)}`);
-    addDebugLine(`Range mode: ${state.settings.rangeMode}`);
-    addDebugLine(`Delete my messages selected: ${Boolean(state.settings.deleteMessages)}`);
-    addDebugLine(`Undo my reactions selected: ${Boolean(state.settings.undoReactions)}`);
-    addDebugLine('Popup validation:');
-    addDebugLine(JSON.stringify(state.settings.popupValidationLog || {}, null, 2));
-    if (state.settings.rangeMode === 'date') {
-      addDebugLine('Content script local range:');
-      addDebugLine(JSON.stringify({
-        selectedFromInput: state.settings.fromDate,
-        selectedToInput: state.settings.toDate,
-        computedFromStart: describeDate(parseDateInputAsLocalDayBounds(state.settings.fromDate, false)),
-        computedToEnd: describeDate(parseDateInputAsLocalDayBounds(state.settings.toDate, true))
-      }, null, 2));
-    }
-  }
-
-  function logScannedMessage(node, details) {
-    if (state.debugLoggedMessageIds.has(details.id)) return;
-    state.debugLoggedMessageIds.add(details.id);
-    addDebugLine('--- Scanned message ---');
-    addDebugLine(JSON.stringify({
-      messageId: details.id,
-      authorDisplayNameDetected: details.author,
-      authorDetectionSource: details.authorDetails.source,
-      authorInferred: details.authorDetails.inferred,
-      authorInferenceConfidence: details.authorDetails.confidence,
-      authorMatchedEnteredDisplayName: details.authorMatched,
-      hasMessageContentElement: getMessageNodeIndicators(node).hasMessageContentElement,
-      hasTimestamp: getMessageNodeIndicators(node).hasTimestamp,
-      hasAttachmentOrMedia: getMessageNodeIndicators(node).hasAttachmentOrMedia,
-      isRealMessageNode: isRealMessageNode(node),
-      rawTimestampAttributesFound: getTimestampAttributes(node),
-      parsedDateResult: describeDate(details.date),
-      nearestVisibleDiscordDayDividerText: getNearestDayDividerText(node),
-      selectedFromInput: state.settings.fromDate,
-      selectedToInput: state.settings.toDate,
-      computedLocalFromStart: state.settings.rangeMode === 'date' ? describeDate(parseDateInputAsLocalDayBounds(state.settings.fromDate, false)) : null,
-      computedLocalToEnd: state.settings.rangeMode === 'date' ? describeDate(parseDateInputAsLocalDayBounds(state.settings.toDate, true)) : null,
-      messageInsideSelectedRange: details.inRange,
-      messageWouldBeTargeted: details.wouldTargetMessage,
-      messageTextLengthOnly: getMessageTextLength(node)
-    }, null, 2));
-  }
-
-  function logScannedReaction(reaction, details) {
-    addDebugLine('--- Scanned reaction ---');
-    addDebugLine(JSON.stringify({
-      messageId: reaction.messageId,
-      reactionLabelOrEmojiIdentifier: reaction.label,
-      appearsToBelongToUser: true,
-      wouldBeUndone: details.wouldBeUndone,
-      dateRangeDecisionBasedOnParentMessageDate: details.inRange
-    }, null, 2));
-  }
-
-  function getTimestampAttributes(node) {
-    return Array.from(node.querySelectorAll('time, [datetime], [aria-label], [title]')).slice(0, 8).map((el) => ({
-      tagName: el.tagName.toLowerCase(),
-      datetime: el.getAttribute('datetime'),
-      ariaLabel: el.getAttribute('aria-label'),
-      title: el.getAttribute('title')
-    })).filter((entry) => entry.datetime || entry.ariaLabel || entry.title);
-  }
-  function getNearestDayDividerText(node) { const divider = previousElements(node).find((el) => /divider|date|separator/i.test(`${el.className || ''} ${el.getAttribute('role') || ''}`) && (el.textContent || '').trim()); return divider ? divider.textContent.trim().slice(0, 120) : ''; }
-  function previousElements(node) { const els=[]; let cur=node; while(cur && els.length<80){ cur=cur.previousElementSibling || cur.parentElement?.previousElementSibling; if(cur) els.push(cur); } return els; }
-  function getMessageTextLength(node) { return (node.querySelector('[id^="message-content-"]')?.textContent || '').length; }
-  function describeDate(date) { if (!date) return null; const time = date.getTime(); return { toString: date.toString(), toISOString: Number.isNaN(time) ? null : date.toISOString(), getTime: time, getTimezoneOffset: date.getTimezoneOffset() }; }
-  function addDebugLine(line) { state.debugLog.push(String(line)); }
-  function getDebugLogText() { return `${state.debugLog.join('\n')}\n`; }
-  async function copyDebugLog() { await navigator.clipboard?.writeText(getDebugLogText()); state.status='Debug log copied.'; updateCounts(); }
-  function downloadDebugLog() { const url=URL.createObjectURL(new Blob([getDebugLogText()], { type: 'text/plain' })); const a=document.createElement('a'); a.href=url; a.download='discord-dm-wiper-debug-log.txt'; a.click(); setTimeout(()=>URL.revokeObjectURL(url), 1000); }
-
-  function updateCounts() { const o=document.getElementById('ddmw-overlay'); if(!o) return; const ids=['ddmw-msg-count','ddmw-react-count','ddmw-estimate','ddmw-status']; if(!ids.every((id)=>document.getElementById(id))) return; document.getElementById('ddmw-msg-count').textContent=`${state.settings.developerMode ? 'Messages that would be deleted' : 'Messages to delete'}: ${messageCount()}`; document.getElementById('ddmw-react-count').textContent=`${state.settings.developerMode ? 'Reactions that would be undone' : 'Reactions to undo'}: ${reactionCount()}`; document.getElementById('ddmw-estimate').textContent=`${state.settings.developerMode ? 'Estimated normal-mode time' : 'Estimated deletion time'}: ${estimate()}`; document.getElementById('ddmw-status').textContent=`Status: ${state.status}`; updateConfirmState(); }
-  function updateConfirmState() { if(state.settings?.developerMode) return; const btn=document.getElementById('ddmw-confirm'), chk=document.getElementById('ddmw-understand'), txt=document.getElementById('ddmw-delete-text'); if(!btn||!chk||!txt) return; btn.disabled = messageCount()+reactionCount() < 1 || !chk.checked || txt.value !== 'DELETE' || (!state.settings.deleteMessages && !state.settings.undoReactions); }
+  function updateCounts() { const o=document.getElementById('ddmw-overlay'); if(!o) return; const ids=['ddmw-msg-count','ddmw-react-count','ddmw-estimate','ddmw-status']; if(!ids.every((id)=>document.getElementById(id))) return; document.getElementById('ddmw-msg-count').textContent=`Messages to delete: ${messageCount()}`; document.getElementById('ddmw-react-count').textContent=`Reactions to undo: ${reactionCount()}`; document.getElementById('ddmw-estimate').textContent=`Estimated deletion time: ${estimate()}`; document.getElementById('ddmw-status').textContent=`Status: ${state.status}`; updateConfirmState(); }
+  function updateConfirmState() { const btn=document.getElementById('ddmw-confirm'), chk=document.getElementById('ddmw-understand'), txt=document.getElementById('ddmw-delete-text'); if(!btn||!chk||!txt) return; btn.disabled = messageCount()+reactionCount() < 1 || !chk.checked || txt.value !== 'DELETE' || (!state.settings.deleteMessages && !state.settings.undoReactions); }
   function ensureOverlay() { let o=document.getElementById('ddmw-overlay'); if(!o){ o=document.createElement('div'); o.id='ddmw-overlay'; document.body.appendChild(o);} return o; }
   function closeOverlay(){ document.getElementById('ddmw-overlay')?.remove(); state.observer?.disconnect(); document.removeEventListener('scroll', scheduleScan, true); }
   function messageCount(){ return state.settings?.deleteMessages ? state.messages.size : 0; } function reactionCount(){ return state.settings?.undoReactions ? state.reactions.size : 0; }
