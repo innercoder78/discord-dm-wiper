@@ -63,7 +63,7 @@ No build command is required.
 9. Review the live counts.
 10. If you are sure, check the warning box, type `DELETE`, and click `Confirm Wipe`.
 
-The extension waits 1-2 seconds before each action and waits for Discord's UI to confirm that the item disappeared before counting it as complete. If Discord lags or the UI does not confirm progress, the wipe pauses rather than blindly continuing.
+The extension waits 1-2 seconds before each action and waits for Discord's UI to confirm that the item disappeared before counting it as complete. If Discord does not confirm progress, it retries the same item once; if confirmation still does not arrive, the wipe pauses rather than blindly continuing.
 
 ## Date ranges
 

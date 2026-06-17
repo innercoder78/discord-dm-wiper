@@ -22,6 +22,11 @@
   });
 
   function startOverlay(settings) {
+    const context = getDiscordDmContext();
+    if (!context.ok) {
+      renderUnsupportedContext(context.message);
+      return;
+    }
     state.settings = settings;
     state.messages.clear();
     state.reactions.clear();
@@ -31,6 +36,34 @@
     renderReview();
     installScanners();
     scanLoadedMessages('Scanning loaded history...');
+  }
+
+  function renderUnsupportedContext(message) {
+    const overlay = ensureOverlay();
+    overlay.innerHTML = `<header><h2>Discord DM Wiper</h2><h3>Unsupported Discord view</h3></header><section><p class="warning">${escapeHtml(message)}</p><p class="muted">This extension only works in Discord Web one-on-one DMs. It will not run in server channels, group DMs, or other Discord views.</p><button id="ddmw-close">Close</button></section>`;
+    overlay.querySelector('#ddmw-close').onclick = closeOverlay;
+  }
+
+  function getDiscordDmContext() {
+    if (location.hostname !== 'discord.com' && !location.hostname.endsWith('.discord.com')) {
+      return { ok: false, message: 'Open a one-on-one Discord DM to use Discord DM Wiper.' };
+    }
+
+    const dmRoute = location.pathname.match(/^\/channels\/@me\/(\d{15,25})(?:\b|\/)?/);
+    if (!dmRoute) return { ok: false, message: 'Open a one-on-one Discord DM to use Discord DM Wiper.' };
+
+    // Discord group DMs share the /channels/@me/:id route, so the URL alone is not enough.
+    // Keep this heuristic intentionally conservative and block when selected navigation or
+    // the active header exposes group-DM wording.
+    const activeChannel = document.querySelector('[aria-current="page"], [class*="selected"] a[href*="/channels/@me/"], a[href$="' + dmRoute[1] + '"]');
+    const activeText = `${activeChannel?.textContent || ''} ${activeChannel?.getAttribute('aria-label') || ''}`;
+    const header = document.querySelector('main header, [class*="chat"] header, [aria-label*="Channel header"]');
+    const headerText = `${header?.textContent || ''} ${header?.getAttribute('aria-label') || ''}`;
+    if (/group\s*dm|group message|members?\s*list/i.test(activeText) || /group\s*dm|group message/i.test(headerText)) {
+      return { ok: false, message: 'Open a one-on-one Discord DM to use Discord DM Wiper.' };
+    }
+
+    return { ok: true };
   }
 
   function renderReview() {
@@ -99,7 +132,19 @@
       findOwnReactions(node).forEach((reaction, index) => state.reactions.set(`${id}:r:${index}:${reaction.label}`, { id: `${id}:r:${index}:${reaction.label}`, messageId: id, label: reaction.label }));
     }
   }
-  function getMessageId(node) { const raw = node.id || node.getAttribute('data-list-item-id') || ''; const match = raw.match(/(\d{15,25})/); return match ? match[1] : null; }
+  function getMessageId(node) {
+    const content = node.querySelector('[id^="message-content-"]');
+    const contentMatch = content?.id.match(/^message-content-(\d{15,25})$/);
+    if (contentMatch) return contentMatch[1];
+
+    const labelledBy = node.getAttribute('aria-labelledby') || '';
+    const labelledMatch = labelledBy.match(/message-content-(\d{15,25})/);
+    if (labelledMatch) return labelledMatch[1];
+
+    const raw = `${node.id || ''} ${node.getAttribute('data-list-item-id') || ''}`;
+    const snowflakes = raw.match(/\d{15,25}/g);
+    return snowflakes && snowflakes.length ? snowflakes[snowflakes.length - 1] : null;
+  }
   function getAuthor(node) { const author = node.querySelector('[class*="username"], h3 span, [aria-label*="Username"]'); return author ? author.textContent.trim() : ''; }
   function getMessageDate(node) { const time = node.querySelector('time[datetime]'); if (!time) return null; const date = new Date(time.getAttribute('datetime')); return Number.isNaN(date.getTime()) ? null : date; }
   function findOwnReactions(node) {
@@ -126,32 +171,84 @@
   }
   async function waitIfPaused() { while (state.paused && !state.stopped) await sleep(250); return !state.stopped; }
   async function undoReaction(target) {
-    const node = findNodeByMessageId(target.messageId); const reaction = node && findOwnReactions(node).find((r) => r.label === target.label);
-    if (!reaction) { state.stats.skipped++; return; }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await tryUndoReaction(target);
+      if (result === 'done') { state.stats.reactionsUndone++; return; }
+      if (result === 'missing') { state.stats.skipped++; return; }
+      state.status = 'Discord did not confirm the reaction undo. Retrying once...';
+      await sleep(700);
+    }
+    pauseOnStall();
+  }
+  async function tryUndoReaction(target) {
+    const node = findNodeByMessageId(target.messageId);
+    const reaction = node && findOwnReactions(node).find((r) => r.label === target.label);
+    if (!reaction) return 'missing';
     reaction.el.click();
     const ok = await waitFor(() => { const fresh = findNodeByMessageId(target.messageId); return !fresh || !findOwnReactions(fresh).some((r) => r.label === target.label); }, 12000);
-    ok ? state.stats.reactionsUndone++ : pauseOnStall();
+    return ok ? 'done' : 'timeout';
   }
   async function deleteMessage(target) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await tryDeleteMessage(target);
+      if (result === 'done') { state.stats.messagesDeleted++; return; }
+      if (result === 'missing') { state.stats.skipped++; return; }
+      state.status = 'Discord did not confirm the message deletion. Retrying once...';
+      await sleep(700);
+    }
+    pauseOnStall();
+  }
+  async function tryDeleteMessage(target) {
     const node = findNodeByMessageId(target.id);
-    if (!node || getAuthor(node) !== state.settings.displayName) { state.stats.skipped++; return; }
-    node.scrollIntoView({ block: 'center' }); node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    await sleep(300);
-    const more = findVisibleButton(['More', 'Actions', 'message-actions']) || node.querySelector('button[aria-label*="More"], button[aria-label*="Actions"]');
-    if (more) more.click();
-    await sleep(300);
-    const del = findMenuItem(/delete message/i) || findVisibleButton(['Delete Message', 'Delete']);
-    if (!del) { state.stats.skipped++; return; }
-    del.click(); await sleep(300);
-    const confirm = findMenuItem(/^delete$/i) || findVisibleButton(['Delete']);
-    if (confirm) confirm.click();
+    if (!node || getAuthor(node) !== state.settings.displayName) return 'missing';
+    node.scrollIntoView({ block: 'center' });
+    node.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    await sleep(350);
+
+    const more = findMessageActionButton(node);
+    if (!more) return 'missing';
+    more.click();
+    const menu = await waitForElement(() => findOpenMenuForMessage(target.id), 2500);
+    if (!menu) return 'missing';
+
+    const del = findDeleteMenuItem(menu);
+    if (!del) return 'missing';
+    del.click();
+
+    const dialog = await waitForElement(findDeleteConfirmDialog, 4000);
+    if (!dialog) return 'timeout';
+    const confirm = findDialogDeleteButton(dialog);
+    if (!confirm) return 'missing';
+    confirm.click();
+
     const ok = await waitFor(() => !findNodeByMessageId(target.id), 15000);
-    ok ? state.stats.messagesDeleted++ : pauseOnStall();
+    return ok ? 'done' : 'timeout';
   }
   function pauseOnStall() { state.stats.failed++; state.paused = true; state.status = 'Wiping paused. Discord did not confirm the last deletion. This may be caused by lag, a dropped connection, a Discord outage, or a UI change.'; }
   function findNodeByMessageId(id) { return document.getElementById(`chat-messages-${id}`) || getMessageNodes().find((n) => getMessageId(n) === id); }
-  function findVisibleButton(labels) { return Array.from(document.querySelectorAll('button[aria-label], [role="button"][aria-label]')).find((b) => labels.some((l) => (b.getAttribute('aria-label') || '').includes(l))); }
-  function findMenuItem(regex) { return Array.from(document.querySelectorAll('[role="menuitem"], button')).find((el) => regex.test(el.textContent.trim()) || regex.test(el.getAttribute('aria-label') || '')); }
+  function findMessageActionButton(node) {
+    return Array.from(node.querySelectorAll('button[aria-label], [role="button"][aria-label]')).find((button) => {
+      const label = button.getAttribute('aria-label') || '';
+      return /more|actions/i.test(label);
+    });
+  }
+  function findOpenMenuForMessage(messageId) {
+    const menus = Array.from(document.querySelectorAll('[role="menu"]')).filter((menu) => menu.offsetParent !== null);
+    return menus.find((menu) => {
+      const text = menu.textContent || '';
+      const labelled = menu.getAttribute('aria-label') || '';
+      return /delete message/i.test(text) || /message actions/i.test(labelled) || labelled.includes(messageId);
+    }) || null;
+  }
+  function findDeleteMenuItem(menu) {
+    return Array.from(menu.querySelectorAll('[role="menuitem"], button')).find((el) => /delete message/i.test(el.textContent.trim()) || /delete message/i.test(el.getAttribute('aria-label') || '')) || null;
+  }
+  function findDeleteConfirmDialog() {
+    return Array.from(document.querySelectorAll('[role="dialog"], [aria-modal="true"]')).find((dialog) => /delete message/i.test(dialog.textContent || '')) || null;
+  }
+  function findDialogDeleteButton(dialog) {
+    return Array.from(dialog.querySelectorAll('button')).find((button) => /^delete$/i.test(button.textContent.trim()) || /^delete$/i.test(button.getAttribute('aria-label') || '')) || null;
+  }
 
   function renderProgress() { const overlay = ensureOverlay(); overlay.innerHTML = `<header><h2>Discord DM Wiper</h2><h3>Wiping...</h3></header><section><p>Messages deleted: ${state.stats.messagesDeleted} / ${state.wipeList.messages.length}</p><p>Reactions undone: ${state.stats.reactionsUndone} / ${state.wipeList.reactions.length}</p><p>Skipped: ${state.stats.skipped}</p><p>Failed: ${state.stats.failed}</p><p>Status: ${state.status}</p><button id="ddmw-pause">Pause</button><button id="ddmw-resume">Resume</button><button id="ddmw-skip" class="secondary">Skip</button><button id="ddmw-stop" class="danger">Stop</button></section>`; overlay.querySelector('#ddmw-pause').onclick=()=>{state.paused=true;}; overlay.querySelector('#ddmw-resume').onclick=()=>{state.paused=false; state.status='Resuming wipe.';}; overlay.querySelector('#ddmw-skip').onclick=()=>{state.paused=false; state.status='Skipped stalled item.';}; overlay.querySelector('#ddmw-stop').onclick=()=>{state.stopped=true; renderComplete();}; }
   function renderComplete() { state.mode='complete'; const s=state.stats; ensureOverlay().innerHTML = `<header><h2>Discord DM Wiper</h2><h3>Wipe complete</h3></header><section><p>Messages deleted: ${s.messagesDeleted}</p><p>Reactions undone: ${s.reactionsUndone}</p><p>Skipped: ${s.skipped}</p><p>Failed: ${s.failed}</p><button id="ddmw-close">Close</button></section>`; document.getElementById('ddmw-close').onclick=closeOverlay; }
@@ -166,5 +263,6 @@
   function optionsLabel(){ return [state.settings.deleteMessages&&'Delete my messages', state.settings.undoReactions&&'Undo my reactions'].filter(Boolean).join(', '); }
   function randomDelay(){ return sleep(1000 + Math.floor(Math.random() * 1001)); } function sleep(ms){ return new Promise((r)=>setTimeout(r,ms)); }
   async function waitFor(fn, timeout){ const end=Date.now()+timeout; while(Date.now()<end){ if(fn()) return true; await sleep(300);} return false; }
+  async function waitForElement(fn, timeout){ let found=null; const ok=await waitFor(()=>{ found=fn(); return Boolean(found); }, timeout); return ok ? found : null; }
   function escapeHtml(v){ return String(v).replace(/[&<>"]/g, (c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 }());
