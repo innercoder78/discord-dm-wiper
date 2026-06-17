@@ -172,6 +172,7 @@
     if (!node || node.closest('[class*="repliedMessage"], [class*="replyBar"]')) return false;
     if (containsNestedMessageNodes(node)) return false;
     const indicators = getMessageNodeIndicators(node);
+    if (hasOnlyContainerIdEvidence(node, indicators)) return false;
     return Boolean(indicators.hasTimestamp || indicators.hasMessageContentElement || indicators.hasAttachmentOrMedia || indicators.hasMessageActionArea);
   }
   function containsNestedMessageNodes(node) {
@@ -186,7 +187,7 @@
     };
   }
   function hasAttachmentOrMedia(node) {
-    return Boolean(node.querySelector([
+    const mediaSelectors = [
       '[class*="attachment"]',
       '[class*="embed"]',
       '[class*="imageWrapper"]',
@@ -198,7 +199,33 @@
       'a[href][download]',
       'a[href*="cdn.discordapp.com"]',
       'a[href*="media.discordapp.net"]'
-    ].join(',')));
+    ].join(',');
+    return Array.from(node.querySelectorAll(mediaSelectors)).some((media) => isMediaOwnedByMessageNode(media, node));
+  }
+  function isMediaOwnedByMessageNode(media, node) {
+    const closestMessageNode = media.closest('[id^="chat-messages-"], li[class*="messageListItem"], div[class*="messageListItem"]');
+    if (closestMessageNode && closestMessageNode !== node) return false;
+
+    // Media-only evidence is only safe when the candidate is already shaped like an
+    // individual Discord message. Broad DM/channel containers can contain unrelated
+    // media deep in their subtree, so do not let that media promote an otherwise
+    // unstructured container into a scannable message.
+    const hasMessageSpecificEvidence = Boolean(
+      node.querySelector('time[datetime]') ||
+      node.querySelector('[id^="message-content-"]') ||
+      hasMessageActionArea(node)
+    );
+    return hasMessageSpecificEvidence;
+  }
+  function hasOnlyContainerIdEvidence(node, indicators) {
+    return Boolean(
+      node.id &&
+      /^chat-messages-\d{15,25}$/.test(node.id) &&
+      !indicators.hasTimestamp &&
+      !indicators.hasMessageContentElement &&
+      !indicators.hasMessageActionArea &&
+      !indicators.hasAttachmentOrMedia
+    );
   }
   function hasMessageActionArea(node) {
     return Array.from(node.querySelectorAll('[aria-label], [role="button"]')).some((el) => /more|actions|reply|react/i.test(`${el.getAttribute('aria-label') || ''} ${el.getAttribute('role') || ''}`));
