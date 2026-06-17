@@ -152,12 +152,17 @@
   }
   function isInRange(date) {
     if (state.settings.rangeMode === 'everything') return true;
-    const start = localBoundary(state.settings.fromDate, false).getTime();
-    const end = localBoundary(state.settings.toDate, true).getTime();
+    const range = getDateRangeMs(state.settings);
     const t = date.getTime();
-    return t >= start && t <= end;
+    return t >= range.fromStart && t <= range.toEnd;
   }
-  function localBoundary(value, end) { const [y, m, d] = value.split('-').map(Number); return new Date(y, m - 1, d, end ? 23 : 0, end ? 59 : 0, end ? 59 : 0, end ? 999 : 0); }
+  function getDateRangeMs(settings) {
+    return {
+      fromStart: localDayBoundaryMs(settings.fromDate, false),
+      toEnd: localDayBoundaryMs(settings.toDate, true)
+    };
+  }
+  function localDayBoundaryMs(value, endOfDay) { const [y, m, d] = value.split('-').map(Number); return new Date(y, m - 1, d, endOfDay ? 23 : 0, endOfDay ? 59 : 0, endOfDay ? 59 : 0, endOfDay ? 999 : 0).getTime(); }
 
   function beginWipe() {
     state.wipeList = { messages: Array.from(state.messages.values()), reactions: Array.from(state.reactions.values()) };
