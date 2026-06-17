@@ -1,0 +1,14 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; width: 360px; font-family: Arial, sans-serif; background: #1e1f22; color: #f2f3f5; }
+.popup { padding: 16px; }
+h1 { margin: 0 0 8px; font-size: 22px; }
+.description, .note, small { color: #b5bac1; }
+.field, fieldset label { display: block; margin: 10px 0; }
+input[type="text"], input[type="date"] { width: 100%; margin-top: 5px; padding: 8px; border: 1px solid #4e5058; border-radius: 4px; background: #313338; color: #f2f3f5; }
+fieldset { border: 1px solid #3f4147; border-radius: 6px; margin: 14px 0; padding: 10px 12px; }
+legend { color: #dbdee1; font-weight: 700; }
+.dates { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-left: 22px; }
+.error { min-height: 18px; color: #ff8c8c; }
+button { width: 100%; padding: 10px; border: 0; border-radius: 5px; background: #5865f2; color: white; font-weight: 700; cursor: pointer; }
+button:hover { background: #4752c4; }

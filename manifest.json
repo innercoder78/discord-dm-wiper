@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Discord DM Wiper",
+  "version": "0.1.0",
+  "description": "Wipe your own messages and reactions from the currently open Discord DM.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["https://discord.com/*", "https://*.discord.com/*"],
+  "action": {
+    "default_title": "Discord DM Wiper",
+    "default_popup": "popup/popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://discord.com/*", "https://*.discord.com/*"],
+      "js": ["content/content.js"],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

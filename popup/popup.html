@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Discord DM Wiper</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main class="popup">
+    <h1>Discord DM Wiper</h1>
+    <p class="description">Wipe your own messages and reactions from the currently open Discord DM.</p>
+
+    <label class="field">
+      <span>Your Discord display name</span>
+      <input id="displayName" type="text" autocomplete="off" required>
+      <small>Use the exact name shown above your messages in Discord.</small>
+    </label>
+
+    <fieldset>
+      <legend>Wipe range</legend>
+      <label><input type="radio" name="rangeMode" value="date" checked> Date range</label>
+      <div class="dates" id="dateFields">
+        <label>From date <input id="fromDate" type="date"></label>
+        <label>To date <input id="toDate" type="date"></label>
+      </div>
+      <label><input type="radio" name="rangeMode" value="everything"> EVERYTHING scanned in this DM</label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Wipe options</legend>
+      <label><input id="deleteMessages" type="checkbox" checked> Delete my messages</label>
+      <label><input id="undoReactions" type="checkbox" checked> Undo my reactions</label>
+    </fieldset>
+
+    <p class="note">You will review the count before anything is wiped.</p>
+    <p id="error" class="error" role="alert"></p>
+    <button id="start" type="button">START</button>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
