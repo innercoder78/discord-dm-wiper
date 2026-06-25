@@ -35,12 +35,19 @@
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !/^https:\/\/(canary\.|ptb\.)?discord\.com\//.test(tab.url || '')) return showError('Open a Discord Web one-on-one DM first.');
 
-    await chrome.tabs.sendMessage(tab.id, { type: 'DDMW_START', settings }).catch(async () => {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/content.js'] });
-      await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content/content.css'] });
+    try {
       await chrome.tabs.sendMessage(tab.id, { type: 'DDMW_START', settings });
-    });
-    window.close();
+      window.close();
+    } catch (initialError) {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content/content.js'] });
+        await chrome.scripting.insertCSS({ target: { tabId: tab.id }, files: ['content/content.css'] });
+        await chrome.tabs.sendMessage(tab.id, { type: 'DDMW_START', settings });
+        window.close();
+      } catch (startupError) {
+        showError("Couldn't start the overlay. Reload Discord and try again.");
+      }
+    }
   });
 
   function isValidDateRange(settings) {
