@@ -5,9 +5,21 @@
   "description": "Wipe your own messages and reactions from the currently open Discord DM.",
   "permissions": ["activeTab", "scripting"],
   "host_permissions": ["https://discord.com/*", "https://*.discord.com/*"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "action": {
     "default_title": "Discord DM Wiper",
-    "default_popup": "popup/popup.html"
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   },
   "content_scripts": [
     {
