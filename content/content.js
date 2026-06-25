@@ -75,14 +75,15 @@
       <section>
         <p>Scroll through the part of this DM you want included.</p>
         <p>${state.settings.rangeMode === 'date' ? 'For a date range, scroll around that range.' : 'For EVERYTHING, scroll through as much history as you want included.'}</p>
-        <p class="muted">EVERYTHING means every matching item scanned in this DM, not messages Discord has not loaded yet.</p>
+        <p class="muted">EVERYTHING means every matching item scanned and currently loaded in this DM, not messages Discord has not loaded yet.</p>
+        <p class="warning">Only matching items currently loaded in Discord can be wiped. If Discord unloads older messages before confirmation, they will be skipped.</p>
       </section>
       <section><strong>Current wipe settings</strong><div class="grid">
         <span>Range</span><span>${rangeLabel()}</span>
         <span>Display name</span><span>${escapeHtml(state.settings.displayName)}</span>
         <span>Wipe options selected</span><span>${optionsLabel()}</span>
       </div></section>
-      <section><strong>Found so far</strong>
+      <section><strong>Currently loaded and ready to wipe</strong>
         <p id="ddmw-msg-count">Messages to delete: ${messageCount()}</p>
         <p id="ddmw-react-count">Standalone reactions to undo: ${reactionCount()}</p>
         <p id="ddmw-estimate">Estimated deletion time: ${estimate()}</p>
@@ -95,13 +96,15 @@
       </section>
       <section>
         <label><input id="ddmw-understand" type="checkbox"> I understand this cannot be undone.</label>
+        <label><input id="ddmw-one-on-one" type="checkbox"> I confirm this is a one-on-one DM, not a group DM.</label>
         <label>Type DELETE to confirm:<input id="ddmw-delete-text" type="text" autocomplete="off"></label>
         <button class="secondary" id="ddmw-cancel">Cancel</button><button class="danger" id="ddmw-confirm" disabled>Confirm Wipe</button>
       </section>`;
     overlay.querySelector('#ddmw-cancel')?.addEventListener('click', closeOverlay);
     overlay.querySelector('#ddmw-confirm')?.addEventListener('click', beginWipe);
-    overlay.querySelector('#ddmw-understand')?.addEventListener('input', updateConfirmState);
-    overlay.querySelector('#ddmw-delete-text')?.addEventListener('input', updateConfirmState);
+    overlay.querySelector('#ddmw-understand')?.addEventListener('input', () => updateConfirmState());
+    overlay.querySelector('#ddmw-one-on-one')?.addEventListener('input', () => updateConfirmState());
+    overlay.querySelector('#ddmw-delete-text')?.addEventListener('input', () => updateConfirmState());
     updateConfirmState();
   }
 
@@ -115,11 +118,12 @@
 
   function scanLoadedMessages(status) {
     state.status = status;
-    const before = messageCount() + reactionCount();
+    const before = scannedTargetCount();
     getMessageNodes().forEach(scanMessageNode);
-    const after = messageCount() + reactionCount();
-    state.status = after > before ? 'New matching items found.' : (after > 0 ? 'Ready to wipe.' : 'No new matching items found recently. Scroll farther to include more history.');
-    updateCounts();
+    const actionable = getActionableTargets();
+    const after = scannedTargetCount();
+    state.status = describeReviewStatus(actionable, after > before);
+    updateCounts(actionable);
   }
 
   function getMessageNodes() {
@@ -284,7 +288,14 @@
   function parseDateInputAsLocalDayBounds(dateString, isEndOfDay) { const [year, month, day] = dateString.split('-').map(Number); return isEndOfDay ? new Date(year, month - 1, day, 23, 59, 59, 999) : new Date(year, month - 1, day, 0, 0, 0, 0); }
 
   function beginWipe() {
-    state.wipeList = { messages: Array.from(state.messages.values()), reactions: Array.from(state.reactions.values()) };
+    scanLoadedMessages('Revalidating currently loaded items...');
+    const actionable = getActionableTargets();
+    if (targetCount(actionable) < 1) {
+      state.status = 'No matching items are currently loaded and ready to wipe. Scroll the DM to load matching items, then try again.';
+      updateCounts(actionable);
+      return;
+    }
+    state.wipeList = actionable;
     state.mode = 'wiping'; state.paused = false; state.stopped = false; state.stats = { messagesDeleted: 0, reactionsUndone: 0, skipped: 0, failed: 0 };
     renderProgress(); wipeLoop();
   }
@@ -330,19 +341,34 @@
     await sleep(350);
 
     const more = findMessageActionButton(node);
-    if (!more) return 'missing';
+    if (!more) {
+      state.status = "Could not find Discord's message action menu. Keep the message visible, use Discord Web in English, then try again.";
+      return 'missing';
+    }
     more.click();
     const menu = await waitForElement(() => findOpenMenuForMessage(target.id), 2500);
-    if (!menu) return 'missing';
+    if (!menu) {
+      state.status = "Could not find Discord's message action menu. Keep the message visible, use Discord Web in English, then try again.";
+      return 'missing';
+    }
 
     const del = findDeleteMenuItem(menu);
-    if (!del) return 'missing';
+    if (!del) {
+      state.status = "Could not find Discord's Delete Message menu item. Discord's UI may have changed, or Discord Web may need to be in English.";
+      return 'missing';
+    }
     del.click();
 
     const dialog = await waitForElement(findDeleteConfirmDialog, 4000);
-    if (!dialog) return 'timeout';
+    if (!dialog) {
+      state.status = "Could not find Discord's Delete Message confirmation. Discord's UI may have changed or the item may no longer be loaded.";
+      return 'timeout';
+    }
     const confirm = findDialogDeleteButton(dialog);
-    if (!confirm) return 'missing';
+    if (!confirm) {
+      state.status = "Could not find Discord's Delete confirmation button. Discord's UI may have changed, or Discord Web may need to be in English.";
+      return 'missing';
+    }
     confirm.click();
 
     const ok = await waitFor(() => !findNodeByMessageId(target.id), 15000);
@@ -378,12 +404,41 @@
   function renderComplete() { state.mode='complete'; const s=state.stats; ensureOverlay().innerHTML = `<header><h2>Discord DM Wiper</h2><h3>Wipe complete</h3></header><section><p>Messages deleted: ${s.messagesDeleted}</p><p>Standalone reactions undone: ${s.reactionsUndone}</p><p>Skipped: ${s.skipped}</p><p>Failed: ${s.failed}</p><button id="ddmw-close">Close</button></section>`; document.getElementById('ddmw-close').onclick=closeOverlay; }
 
 
-  function updateCounts() { const o=document.getElementById('ddmw-overlay'); if(!o) return; const ids=['ddmw-msg-count','ddmw-react-count','ddmw-estimate','ddmw-status']; if(!ids.every((id)=>document.getElementById(id))) return; document.getElementById('ddmw-msg-count').textContent=`Messages to delete: ${messageCount()}`; document.getElementById('ddmw-react-count').textContent=`Standalone reactions to undo: ${reactionCount()}`; document.getElementById('ddmw-estimate').textContent=`Estimated deletion time: ${estimate()}`; document.getElementById('ddmw-status').textContent=`Status: ${state.status}`; updateConfirmState(); }
-  function updateConfirmState() { const btn=document.getElementById('ddmw-confirm'), chk=document.getElementById('ddmw-understand'), txt=document.getElementById('ddmw-delete-text'); if(!btn||!chk||!txt) return; btn.disabled = messageCount()+reactionCount() < 1 || !chk.checked || txt.value !== 'DELETE' || (!state.settings.deleteMessages && !state.settings.undoReactions); }
+  function getActionableTargets() {
+    const messages = new Map();
+    const reactions = new Map();
+    getMessageNodes().forEach((node) => {
+      const id = getMessageId(node);
+      if (!id || node.closest('[class*="repliedMessage"], [class*="replyBar"]')) return;
+      const date = getMessageDate(node);
+      if (!date || !isInRange(date)) return;
+      const author = detectAuthor(node).author;
+      const authorMatched = author === state.settings.displayName;
+      if (state.settings.deleteMessages && authorMatched) messages.set(id, { id, author, time: date.getTime() });
+      if (state.settings.undoReactions && !(authorMatched && state.settings.deleteMessages)) {
+        findOwnReactions(node).forEach((reaction, index) => {
+          const reactionTarget = { id: `${id}:r:${index}:${reaction.label}`, messageId: id, label: reaction.label };
+          reactions.set(reactionTarget.id, reactionTarget);
+        });
+      }
+    });
+    return { messages: Array.from(messages.values()), reactions: Array.from(reactions.values()) };
+  }
+  function describeReviewStatus(actionable, foundNewItems) {
+    const actionableTotal = targetCount(actionable);
+    const scannedTotal = scannedTargetCount();
+    if (actionableTotal < scannedTotal) return 'Some previously scanned items are no longer loaded or actionable and will be skipped.';
+    if (foundNewItems) return 'New matching items are currently loaded and ready to wipe.';
+    return actionableTotal > 0 ? 'Ready to wipe currently loaded matching items.' : 'No matching items are currently loaded. Scroll farther to include more history.';
+  }
+  function targetCount(targets) { return targets.messages.length + targets.reactions.length; }
+  function scannedTargetCount(){ return messageCount() + reactionCount(); }
+  function updateCounts(actionable = getActionableTargets()) { const o=document.getElementById('ddmw-overlay'); if(!o) return; const ids=['ddmw-msg-count','ddmw-react-count','ddmw-estimate','ddmw-status']; if(!ids.every((id)=>document.getElementById(id))) return; document.getElementById('ddmw-msg-count').textContent=`Messages to delete: ${actionable.messages.length}`; document.getElementById('ddmw-react-count').textContent=`Standalone reactions to undo: ${actionable.reactions.length}`; document.getElementById('ddmw-estimate').textContent=`Estimated deletion time: ${estimate(actionable)}`; document.getElementById('ddmw-status').textContent=`Status: ${state.status}`; updateConfirmState(actionable); }
+  function updateConfirmState(actionable = getActionableTargets()) { const btn=document.getElementById('ddmw-confirm'), chk=document.getElementById('ddmw-understand'), oneOnOne=document.getElementById('ddmw-one-on-one'), txt=document.getElementById('ddmw-delete-text'); if(!btn||!chk||!oneOnOne||!txt) return; btn.disabled = targetCount(actionable) < 1 || !chk.checked || !oneOnOne.checked || txt.value !== 'DELETE' || (!state.settings.deleteMessages && !state.settings.undoReactions); }
   function ensureOverlay() { let o=document.getElementById('ddmw-overlay'); if(!o){ o=document.createElement('div'); o.id='ddmw-overlay'; document.body.appendChild(o);} return o; }
   function closeOverlay(){ document.getElementById('ddmw-overlay')?.remove(); state.observer?.disconnect(); document.removeEventListener('scroll', scheduleScan, true); }
   function messageCount(){ return state.settings?.deleteMessages ? state.messages.size : 0; } function reactionCount(){ return state.settings?.undoReactions ? state.reactions.size : 0; }
-  function estimate(){ const total=messageCount()+reactionCount(); if(!total) return '—'; const min=total, max=total*2; return max<90 ? `about ${min}–${max} seconds` : `about ${Math.ceil(min/60)}–${Math.ceil(max/60)} minutes`; }
+  function estimate(actionable = getActionableTargets()){ const total=targetCount(actionable); if(!total) return '—'; const min=total, max=total*2; return max<90 ? `about ${min}–${max} seconds` : `about ${Math.ceil(min/60)}–${Math.ceil(max/60)} minutes`; }
   function rangeLabel(){ return state.settings.rangeMode === 'everything' ? 'EVERYTHING scanned in this DM' : `${state.settings.fromDate} through ${state.settings.toDate}`; }
   function optionsLabel(){ return [state.settings.deleteMessages&&'Delete my messages', state.settings.undoReactions&&'Undo my reactions'].filter(Boolean).join(', '); }
   function randomDelay(){ return sleep(1000 + Math.floor(Math.random() * 1001)); } function sleep(ms){ return new Promise((r)=>setTimeout(r,ms)); }
